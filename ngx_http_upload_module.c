@@ -12,7 +12,7 @@
 
 #include <ngx_md5.h>
 
-typedef ngx_md5_t MD5_CTX1;
+typedef ngx_md5_t MD5_CTX;
 
 #define MD5Init ngx_md5_init
 #define MD5Update ngx_md5_update
@@ -55,8 +55,8 @@ typedef ngx_md5_t MD5_CTX1;
 #define X_SESSION_ID_STRING                     "X-Session-ID:"
 #define FORM_DATA_STRING                        "form-data"
 #define ATTACHMENT_STRING                       "attachment"
-#define FILENAME_STRING                         "filename="
-#define FIELDNAME_STRING                        "name="
+#define FILENAME_STRING                         "filename=\""
+#define FIELDNAME_STRING                        "name=\""
 #define BYTES_UNIT_STRING                       "bytes "
 
 #define NGX_UPLOAD_MALFORMED    -11
@@ -189,7 +189,7 @@ typedef struct {
 } ngx_http_upload_loc_conf_t;
 
 typedef struct ngx_http_upload_md5_ctx_s {
-    MD5_CTX1    md5;
+    MD5_CTX     md5;
     u_char      md5_digest[MD5_DIGEST_LENGTH * 2];
 } ngx_http_upload_md5_ctx_t;
 
@@ -1596,11 +1596,6 @@ static ngx_int_t ngx_http_upload_start_handler(ngx_http_upload_ctx_t *u) { /* {{
             u->discard_data = 1;
     }
 
-
-    if(ngx_http_upload_add_headers(r, ulcf) != NGX_OK) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
     return NGX_OK;
 
 cleanup_file:
@@ -1691,6 +1686,10 @@ static void ngx_http_upload_finish_handler(ngx_http_upload_ctx_t *u) { /* {{{ */
             , &u->file_name
             , &u->output_file.name
             );
+
+        if (ngx_http_upload_add_headers(r, ulcf) != NGX_OK) {
+            goto rollback;
+        }
 
         if(ulcf->aggregate_field_templates) {
             af = ulcf->aggregate_field_templates->elts;
@@ -1984,7 +1983,7 @@ ngx_http_upload_buf_merge_range(ngx_http_upload_merger_state_t *ms, ngx_http_upl
                     return NGX_ERROR;
                 }
 
-                if(ms->current_range_n.start > ms->current_range_n.end || ms->current_range_n.start > ms->current_range_n.total
+                if(ms->current_range_n.start >= ms->current_range_n.end || ms->current_range_n.start >= ms->current_range_n.total
                     || ms->current_range_n.end > ms->current_range_n.total)
                 {
                     ngx_log_debug3(NGX_LOG_DEBUG_CORE, ms->log, 0,
@@ -2446,7 +2445,7 @@ ngx_http_upload_md5_variable(ngx_http_request_t *r,
 
     u = ngx_http_get_module_ctx(r, ngx_http_upload_module);
 
-    if(u->md5_ctx == NULL || u->partial_content) {
+    if(u->sha1_ctx == NULL || u->partial_content) {
         v->not_found = 1;
         return NGX_OK;
     }
@@ -3451,8 +3450,6 @@ ngx_http_do_read_upload_client_request_body(ngx_http_request_t *r)
         ngx_del_timer(c->read);
     }
 
-    r->read_event_handler = ngx_http_block_reading;
-
     rc = ngx_http_process_request_body(r, u->to_write);
 
     switch(rc) {
@@ -3521,13 +3518,15 @@ static ngx_int_t upload_parse_content_disposition(ngx_http_upload_ctx_t *upload_
 
     if(filename_start != 0) {
 
-        filename_start += sizeof(FILENAME_STRING) - 1;
+        filename_start += sizeof(FILENAME_STRING)-1;
 
-        if (*filename_start == '\"') {
-            filename_start++;
+        filename_end = filename_start + strcspn(filename_start, "\"");
+
+        if(*filename_end != '\"') {
+            ngx_log_debug0(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
+                           "malformed filename in part header");
+            return NGX_UPLOAD_MALFORMED;
         }
-
-        filename_end = filename_start + strcspn(filename_start, "\";");
 
         /*
          * IE sends full path, strip path from filename
@@ -3555,14 +3554,16 @@ static ngx_int_t upload_parse_content_disposition(ngx_http_upload_ctx_t *upload_
 //    }while((fieldname_start != 0) && (fieldname_start + sizeof(FIELDNAME_STRING) - 1 == filename_start));
 
     if(fieldname_start != 0) {
-        fieldname_start += sizeof(FIELDNAME_STRING) - 1;
-
-        if (*fieldname_start == '\"') {
-            fieldname_start++;
-        }
+        fieldname_start += sizeof(FIELDNAME_STRING)-1;
 
         if(fieldname_start != filename_start) {
-            fieldname_end = fieldname_start + strcspn(fieldname_start, "\";");
+            fieldname_end = fieldname_start + strcspn(fieldname_start, "\"");
+
+            if(*fieldname_end != '\"') {
+                ngx_log_error(NGX_LOG_ERR, upload_ctx->log, 0,
+                               "malformed fieldname in part header");
+                return NGX_UPLOAD_MALFORMED;
+            }
 
             upload_ctx->field_name.len = fieldname_end - fieldname_start;
             upload_ctx->field_name.data = ngx_pcalloc(upload_ctx->request->pool, upload_ctx->field_name.len + 1);
@@ -3936,12 +3937,6 @@ static ngx_int_t upload_parse_request_headers(ngx_http_upload_ctx_t *upload_ctx,
 
         boundary_start_ptr += sizeof(BOUNDARY_STRING) - 1;
         boundary_end_ptr = boundary_start_ptr + strcspn((char*)boundary_start_ptr, " ;\n\r");
-
-        // Handle quoted boundaries
-        if ((boundary_end_ptr - boundary_start_ptr) >= 2 && boundary_start_ptr[0] == '"' && *(boundary_end_ptr - 1) == '"') {
-          boundary_start_ptr++;
-          boundary_end_ptr--;
-        }
 
         if(boundary_end_ptr == boundary_start_ptr) {
             ngx_log_debug0(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
