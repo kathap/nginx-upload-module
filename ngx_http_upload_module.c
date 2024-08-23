@@ -1588,7 +1588,7 @@ static ngx_int_t ngx_http_upload_start_handler(ngx_http_upload_ctx_t *u) { /* {{
 #endif
             }
         }
-
+        pass_field = 1;
         if(pass_field && u->field_name.len != 0) {
             /*
              * Here we do a small hack: the content of a non-file field
