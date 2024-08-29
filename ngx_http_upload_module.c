@@ -2329,7 +2329,6 @@ ngx_http_upload_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
         conf->resumable_uploads = (prev->resumable_uploads != NGX_CONF_UNSET) ?
             prev->resumable_uploads : 0;
     }
-
     if(conf->upload_pass_form_field_default == NGX_CONF_UNSET) {
         conf->upload_pass_form_field_default = (prev->upload_pass_form_field_default != NGX_CONF_UNSET) ?
             prev->upload_pass_form_field_default : 0;
